@@ -28,9 +28,10 @@ package com.salesforce.androidsdk.push;
 
 import android.content.Context;
 import android.content.Intent;
-import androidx.core.app.JobIntentService;
+import android.support.v4.app.JobIntentService;
 
 import com.google.firebase.FirebaseApp;
+import com.google.firebase.FirebaseOptions;
 import com.google.firebase.iid.FirebaseInstanceId;
 import com.salesforce.androidsdk.accounts.UserAccount;
 import com.salesforce.androidsdk.app.SalesforceSDKManager;
@@ -55,11 +56,13 @@ public class SFDCRegistrationIntentService extends JobIntentService {
              * approach works better for us.
              */
             final Context context = SalesforceSDKManager.getInstance().getAppContext();
-            String appName = PushMessaging.getAppNameForFirebase(context);
-            PushMessaging.initializeFirebaseIfNeeded(context);
+            final String pushClientId = BootConfig.getBootConfig(context).getPushNotificationClientId();
+            final FirebaseOptions firebaseOptions = new FirebaseOptions.Builder().
+                    setGcmSenderId(pushClientId).setApplicationId(context.getPackageName()).build();
+            FirebaseApp.initializeApp(context, firebaseOptions);
 
             // Fetches an instance ID from Firebase once the initialization is complete.
-            final FirebaseInstanceId instanceID = FirebaseInstanceId.getInstance(FirebaseApp.getInstance(appName));
+            final FirebaseInstanceId instanceID = FirebaseInstanceId.getInstance();
             final String token = instanceID.getToken(BootConfig.getBootConfig(this).getPushNotificationClientId(), FCM);
             final UserAccount account = SalesforceSDKManager.getInstance().getUserAccountManager().getCurrentUser();
 

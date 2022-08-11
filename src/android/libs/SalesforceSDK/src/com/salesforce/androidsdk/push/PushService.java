@@ -32,9 +32,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.TextUtils;
-
-import androidx.core.app.JobIntentService;
+import android.support.v4.app.JobIntentService;
 
 import com.salesforce.androidsdk.accounts.UserAccount;
 import com.salesforce.androidsdk.accounts.UserAccountManager;
@@ -48,8 +46,6 @@ import com.salesforce.androidsdk.rest.RestClient;
 import com.salesforce.androidsdk.rest.RestClient.ClientInfo;
 import com.salesforce.androidsdk.rest.RestRequest;
 import com.salesforce.androidsdk.rest.RestResponse;
-import com.salesforce.androidsdk.security.KeyStoreWrapper;
-import com.salesforce.androidsdk.security.SalesforceKeyGenerator;
 import com.salesforce.androidsdk.util.SalesforceSDKLogger;
 
 import org.json.JSONObject;
@@ -81,6 +77,7 @@ public class PushService extends JobIntentService {
 
 	// Retry time constants.
     private static final long MILLISECONDS_IN_SIX_DAYS = 518400000L;
+    private static final long SFDC_REGISTRATION_RETRY = 30000;
 
     // Unique identifier for this job.
 	private static final int JOB_ID = 24;
@@ -89,14 +86,12 @@ public class PushService extends JobIntentService {
     private static final String MOBILE_PUSH_SERVICE_DEVICE = "MobilePushServiceDevice";
     private static final String ANDROID_GCM = "androidGcm";
     private static final String SERVICE_TYPE = "ServiceType";
-    private static final String NETWORK_ID = "NetworkId";
-    private static final String RSA_PUBLIC_KEY = "RsaPublicKey";
     private static final String CONNECTION_TOKEN = "ConnectionToken";
     private static final String APPLICATION_BUNDLE = "ApplicationBundle";
     private static final String FIELD_ID = "id";
     private static final String NOT_ENABLED = "not_enabled";
-	static final String PUSH_NOTIFICATION_KEY_NAME = "PushNotificationKey";
-	protected static final int REGISTRATION_STATUS_SUCCEEDED = 0;
+
+    protected static final int REGISTRATION_STATUS_SUCCEEDED = 0;
 	protected static final int REGISTRATION_STATUS_FAILED = 1;
 	protected static final int UNREGISTRATION_STATUS_SUCCEEDED = 2;
 	protected static final int UNREGISTRATION_STATUS_FAILED = 3;
@@ -188,8 +183,7 @@ public class PushService extends JobIntentService {
             retryIntent.putExtra(PushMessaging.ACCOUNT_BUNDLE_KEY, account.toBundle());
         }
         final PendingIntent retryPIntent = PendingIntent.getBroadcast(SalesforceSDKManager.getInstance().getAppContext(),
-        		1, retryIntent,
-				PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
+        		1, retryIntent, PendingIntent.FLAG_ONE_SHOT);
         final AlarmManager am = (AlarmManager) SalesforceSDKManager.getInstance().getAppContext().getSystemService(Context.ALARM_SERVICE);
         am.set(AlarmManager.RTC_WAKEUP, cal.getTimeInMillis(), retryPIntent);
     }
@@ -199,9 +193,11 @@ public class PushService extends JobIntentService {
             SalesforceSDKLogger.e(TAG, "Account is null, will retry registration later");
             return;
         }
+    	long retryInterval = SFDC_REGISTRATION_RETRY;
     	try {
         	final String id = registerSFDCPushNotification(registrationId, account);
         	if (id != null) {
+        		retryInterval = MILLISECONDS_IN_SIX_DAYS;
         		PushMessaging.setRegistrationInfo(SalesforceSDKManager.getInstance().getAppContext(),
                         registrationId, id, account);
         	} else {
@@ -211,7 +207,7 @@ public class PushService extends JobIntentService {
     	} catch (Exception e) {
             SalesforceSDKLogger.e(TAG, "Error occurred during SFDC registration", e);
     	} finally {
-            scheduleSFDCRegistrationRetry(MILLISECONDS_IN_SIX_DAYS, null);
+            scheduleSFDCRegistrationRetry(retryInterval, null);
     	}
     }
 
@@ -271,18 +267,6 @@ public class PushService extends JobIntentService {
             fields.put(CONNECTION_TOKEN, registrationId);
             fields.put(SERVICE_TYPE, ANDROID_GCM);
             fields.put(APPLICATION_BUNDLE, SalesforceSDKManager.getInstance().getAppContext().getPackageName());
-
-            // Adds community ID to the registration payload to allow scoping of notifications per community.
-            final String communityId = UserAccountManager.getInstance().getCurrentUser().getCommunityId();
-            if (!TextUtils.isEmpty(communityId)) {
-            	fields.put(NETWORK_ID, communityId);
-			}
-
-            // Adds an RSA public key to the registration payload if available.
-            final String rsaPublicKey = getRSAPublicKey();
-            if (!TextUtils.isEmpty(rsaPublicKey)) {
-				fields.put(RSA_PUBLIC_KEY, rsaPublicKey);
-			}
             final RestClient client = getRestClient(account);
         	if (client != null) {
                 int status = REGISTRATION_STATUS_FAILED;
@@ -317,16 +301,6 @@ public class PushService extends JobIntentService {
         onPushNotificationRegistrationStatus(REGISTRATION_STATUS_FAILED, account);
     	return null;
     }
-
-    private synchronized String getRSAPublicKey() {
-		String rsaPublicKey = null;
-		final String name = SalesforceKeyGenerator.getUniqueId(PUSH_NOTIFICATION_KEY_NAME);
-		final String sanitizedName = name.replaceAll("[^A-Za-z0-9]", "");
-		if (!TextUtils.isEmpty(sanitizedName)) {
-			rsaPublicKey = KeyStoreWrapper.getInstance().getRSAPublicString(sanitizedName);
-		}
-		return rsaPublicKey;
-	}
 
 	/**
 	 * Send a request to unregister for push notifications and return the response for further processing.
@@ -381,10 +355,7 @@ public class PushService extends JobIntentService {
     	        		account.getUserId(), account.getOrgId(),
     	        		account.getCommunityId(), account.getCommunityUrl(),
 						account.getFirstName(), account.getLastName(), account.getDisplayName(), account.getEmail(),
-						account.getPhotoUrl(), account.getThumbnailUrl(), account.getAdditionalOauthValues(),
-						account.getLightningDomain(), account.getLightningSid(),
-						account.getVFDomain(), account.getVFSid(),
-						account.getContentDomain(), account.getContentSid(), account.getCSRFToken());
+						account.getPhotoUrl(), account.getThumbnailUrl(), account.getAdditionalOauthValues());
                 client = new RestClient(clientInfo, account.getAuthToken(),
                 		HttpAccess.DEFAULT, authTokenProvider);
     		} catch (Exception e) {

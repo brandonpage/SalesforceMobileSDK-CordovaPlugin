@@ -356,9 +356,7 @@ public class InstrumentationEvent {
             if (errorType != null) {
                 json.put(ERROR_TYPE_KEY, errorType.name());
             }
-            if (deviceAppAttributes != null) {
-                json.put(DEVICE_APP_ATTRIBUTES_KEY, deviceAppAttributes.toJson());
-            }
+            json.put(DEVICE_APP_ATTRIBUTES_KEY, deviceAppAttributes.toJson());
             json.put(CONNECTION_TYPE_KEY, connectionType);
             json.put(SENDER_PARENT_ID_KEY, senderParentId);
             json.put(SESSION_START_TIME_KEY, sessionStartTime);

@@ -26,17 +26,13 @@
  */
 package com.salesforce.androidsdk.smartstore.store;
 
-import static com.salesforce.androidsdk.smartstore.app.SmartStoreSDKManager.GLOBAL_SUFFIX;
-
 import android.content.Context;
 import android.text.TextUtils;
 
 import com.salesforce.androidsdk.accounts.UserAccount;
 import com.salesforce.androidsdk.analytics.EventBuilderHelper;
 import com.salesforce.androidsdk.analytics.security.Encryptor;
-import com.salesforce.androidsdk.smartstore.app.SmartStoreSDKManager;
 import com.salesforce.androidsdk.smartstore.util.SmartStoreLogger;
-import com.salesforce.androidsdk.util.ManagedFilesHelper;
 
 import net.sqlcipher.database.SQLiteDatabase;
 import net.sqlcipher.database.SQLiteDatabaseHook;
@@ -45,11 +41,15 @@ import net.sqlcipher.database.SQLiteOpenHelper;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FilenameFilter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,14 +69,14 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	private static final String DB_NAME_SUFFIX = ".db";
 	private static final String ORG_KEY_PREFIX = "00D";
 	private static final String EXTERNAL_BLOBS_SUFFIX = "_external_soup_blobs/";
-	public static final String DATABASES = "databases";
+	private static final String UTF8 = "UTF-8";
 	private static String dataDir;
 	private String dbName;
 
 	/*
 	 * Cache for the helper instances
 	 */
-	private static Map<String, DBOpenHelper> openHelpers = new HashMap<>();
+	private static Map<String, DBOpenHelper> openHelpers = new HashMap<String, DBOpenHelper>();
 
 	/**
 	 * Returns a map of all DBOpenHelper instances created. The key is the
@@ -95,7 +95,23 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	 */
 	public static synchronized List<String> getUserDatabasePrefixList(Context ctx,
 			UserAccount account, String communityId) {
-		return ManagedFilesHelper.getPrefixList(ctx, DATABASES, account.getCommunityLevelFilenameSuffix(communityId), DB_NAME_SUFFIX, null);
+		List<String> result = new ArrayList<>();
+		if(account==null) return  result;
+
+		final String accountSuffix = account.getCommunityLevelFilenameSuffix(communityId);
+		SmartStoreFileFilter userFileFilter = new SmartStoreFileFilter(accountSuffix);
+		final String dbPath = ctx.getApplicationInfo().dataDir + "/databases";
+		final File dir = new File(dbPath);
+		String[] fileNames = dir.list(userFileFilter);
+		if (fileNames != null && fileNames.length > 0) {
+			for (String fileName : fileNames) {
+				int dbFileIndx = fileName.indexOf(".db");
+				if (dbFileIndx >- 1) {
+					result.add(fileName.substring(0, fileName.indexOf(accountSuffix)));
+				}
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -105,7 +121,26 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	 */
 	public static synchronized List<String> getGlobalDatabasePrefixList(Context ctx,
 			UserAccount account, String communityId) {
-		return ManagedFilesHelper.getPrefixList(ctx, DATABASES, "", DB_NAME_SUFFIX, ORG_KEY_PREFIX);
+		List<String> result = new ArrayList<>();
+		String accountSuffix = null;
+		String orgId = null;
+		if (account != null) {
+			accountSuffix = account.getCommunityLevelFilenameSuffix(communityId);
+			orgId = account.getOrgId();
+		}
+		SmartStoreGlobalFileFilter globalFileFilter = new SmartStoreGlobalFileFilter(accountSuffix,
+																					 orgId);
+		final String dbPath = ctx.getApplicationInfo().dataDir + "/databases";
+		final File dir = new File(dbPath);
+		String[] fileNames = dir.list(globalFileFilter);
+		if (fileNames != null && fileNames.length > 0) {
+			for (String fileName : fileNames) {
+				int dbFileIndx = fileName.indexOf(".db");
+				if (dbFileIndx > -1)
+					result.add(fileName.substring(0, dbFileIndx));
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -148,7 +183,7 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	 */
 	public static DBOpenHelper getOpenHelper(Context ctx, String dbNamePrefix,
 			UserAccount account, String communityId) {
-		final StringBuilder dbName = new StringBuilder(dbNamePrefix);
+		final StringBuffer dbName = new StringBuffer(dbNamePrefix);
 
 		// If we have account information, we will use it to create a database suffix for the user.
 		if (account != null) {
@@ -165,13 +200,13 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 			String key = "numGlobalStores";
 			String eventName = "globalSmartStoreInit";
 			if (account == null) {
-				numDbs = getGlobalDatabasePrefixList(ctx, null, communityId);
+				numDbs = getGlobalDatabasePrefixList(ctx, account, communityId);
 			} else {
 				key = "numUserStores";
 				eventName = "userSmartStoreInit";
 				numDbs = getUserDatabasePrefixList(ctx, account, communityId);
 			}
-			int numStores = numDbs.size();
+			int numStores = (numDbs == null) ? 0 : numDbs.size();
 			final JSONObject storeAttributes = new JSONObject();
 			try {
 				storeAttributes.put(key, numStores);
@@ -194,11 +229,6 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 
 	protected void loadLibs(Context context) {
 		SQLiteDatabase.loadLibs(context);
-	}
-
-	@Override
-	public void onConfigure(final SQLiteDatabase db) {
-		db.enableWriteAheadLogging();
 	}
 
 	@Override
@@ -228,9 +258,19 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 		 * manage locking at our level anyway.
 		 */
 		db.setLockingEnabled(false);
+		if (oldVersion == 1) {
+			SmartStore.createLongOperationsStatusTable(db);
+		}
+
+		if (oldVersion < 3) {
+			// DB versions before 3 used soup_names, which has changed to soup_attrs
+			SmartStore.updateTableNameAndAddColumns(db, SmartStore.SOUP_NAMES_TABLE,
+													SmartStore.SOUP_ATTRS_TABLE, new String[] { SoupSpec.FEATURE_EXTERNAL_STORAGE });
+		}
 	}
 
 	@Override
+	@SuppressWarnings("deprecation")
 	public void onOpen(SQLiteDatabase db) {
 		(new SmartStore(db)).resumeLongOperations();
 	}
@@ -293,13 +333,10 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 
 			// If community id was not passed in, then we remove ALL databases for the account.
 			if (account != null && TextUtils.isEmpty(communityId)) {
+				StringBuffer communityDBNamePrefix = new StringBuffer(dbNamePrefix);
 				String accountSuffix = account.getUserLevelFilenameSuffix();
-				File[] files = ManagedFilesHelper
-						.getFiles(ctx, DATABASES, dbNamePrefix + accountSuffix, DB_NAME_SUFFIX, null);
-				for (File file : files) {
-					openHelpers.remove(file.getName());
-				}
-				ManagedFilesHelper.deleteFiles(files);
+				communityDBNamePrefix.append(accountSuffix);
+				deleteFiles(ctx, communityDBNamePrefix.toString());
 			}
 
 			// Delete external blobs directory
@@ -320,29 +357,7 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	 * @param ctx Context.
 	 */
 	public static synchronized void deleteAllUserDatabases(Context ctx) {
-		File[] files = ManagedFilesHelper.getFiles(ctx, DATABASES, ORG_KEY_PREFIX, DB_NAME_SUFFIX, null);
-		for (File file : files) {
-			openHelpers.remove(file.getName());
-		}
-		ManagedFilesHelper.deleteFiles(files);
-	}
-
-	/**
-	 * Deletes all databases of given user.
-	 *
-	 * @param ctx Context.
-	 * @param userAccount User account.
-	 */
-	public static synchronized void deleteAllDatabases(Context ctx, UserAccount userAccount) {
-		if (userAccount != null) {
-			File[] files = ManagedFilesHelper
-				.getFiles(ctx, DATABASES, userAccount.getUserLevelFilenameSuffix(), DB_NAME_SUFFIX,
-					null);
-			for (File file : files) {
-				openHelpers.remove(file.getName());
-			}
-			ManagedFilesHelper.deleteFiles(files);
-		}
+		deleteFiles(ctx, ORG_KEY_PREFIX);
 	}
 
 	/**
@@ -371,7 +386,7 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	 */
 	public static boolean smartStoreExists(Context ctx, String dbNamePrefix,
 			UserAccount account, String communityId) {
-		final StringBuilder dbName = new StringBuilder(dbNamePrefix);
+		final StringBuffer dbName = new StringBuffer(dbNamePrefix);
 		if (account != null) {
 			final String dbSuffix = account.getCommunityLevelFilenameSuffix(communityId);
 			dbName.append(dbSuffix);
@@ -382,17 +397,78 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 
 	static class DBHook implements SQLiteDatabaseHook {
 		public void preKey(SQLiteDatabase database) {
-			// Using sqlcipher 2.x kdf iter because 3.x default (64000) and 4.x default (256000) are too slow
-			// => should open 2.x databases without any migration
-			database.execSQL("PRAGMA cipher_default_kdf_iter = 4000");
+			database.execSQL("PRAGMA cipher_default_kdf_iter = '4000'");
+			// the new default for sqlcipher 3.x (64000) is too slow
+			// also that way we can open 2.x databases without any migration
 		}
 
-		/**
-		 * Need to migrate for SqlCipher 4.x
-		 * @param database db being processed
-		 */
 		public void postKey(SQLiteDatabase database) {
-			database.rawExecSQL("PRAGMA cipher_migrate");
+		}
+	};
+
+	private static void deleteFiles(Context ctx, String prefix) {
+		final String dbPath = ctx.getApplicationInfo().dataDir + "/databases";
+		final File dir = new File(dbPath);
+		if (dir != null) {
+			final SmartStoreFileFilter fileFilter = new SmartStoreFileFilter(prefix);
+			final File[] fileList = dir.listFiles();
+			if (fileList != null) {
+				for (final File file : fileList) {
+					if (file != null && fileFilter.accept(dir, file.getName())) {
+						file.delete();
+						openHelpers.remove(file.getName());
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * This class acts as a filter to identify only the relevant SmartStore files.
+	 *
+	 * @author bhariharan
+	 */
+	private static class SmartStoreFileFilter implements FilenameFilter {
+
+		private String dbNamePrefix;
+
+		/**
+		 * Parameterized constructor.
+		 *
+		 * @param dbNamePrefix Database name prefix pattern.
+		 */
+		public SmartStoreFileFilter(String dbNamePrefix) {
+			this.dbNamePrefix = dbNamePrefix;
+		}
+
+		@Override
+		public boolean accept(File dir, String filename) {
+			if (filename != null && filename.contains(dbNamePrefix)) {
+				return true;
+			}
+			return false;
+		}
+
+		String getDbNamePrefix(){
+			return  dbNamePrefix;
+		}
+	}
+
+	private static class SmartStoreGlobalFileFilter extends SmartStoreFileFilter {
+
+		String orgId;
+
+		public SmartStoreGlobalFileFilter(String dbNamePrefix, String orgId) {
+			super(dbNamePrefix);
+			this.orgId = orgId;
+		}
+
+		@Override
+		public boolean accept(File dir, String filename) {
+			// if there isn't a prefix   OR
+			// ( IS NOT A USER's DB)  AND does not have an orgid (belong to  another user)
+			// then it is a global file
+			return (this.getDbNamePrefix()==null) || (!super.accept(dir, filename) && !filename.contains(this.orgId));
 		}
 	}
 
@@ -494,39 +570,34 @@ public class DBOpenHelper extends SQLiteOpenHelper {
 	}
 
 	/**
-	 * Changes the encryption key on the database.
-	 *
-	 * @param db Database object.
-	 * @param oldKey Old encryption key.
-	 * @param newKey New encryption key.
-	 */
-	public static synchronized void changeKey(SQLiteDatabase db, String oldKey, String newKey) {
-		db.query("PRAGMA rekey = '" + newKey + "'");
-	}
-
-	/**
-	 * Re-encrypts the files on external storage with the new key. If external storage is not
-	 * enabled for any table in the db, this operation is ignored.
+	 * Re-encrypts the files on external storage with the new key. If external storage is not enabled for any table in the db, this operation is ignored.
 	 *
 	 * @param db DB containing external storage (if applicable).
 	 * @param oldKey Old key with which to decrypt the existing data.
 	 * @param newKey New key with which to encrypt the existing data.
 	 */
-	public static synchronized void reEncryptAllFiles(SQLiteDatabase db, String oldKey, String newKey) {
-		final File dir = new File(db.getPath() + EXTERNAL_BLOBS_SUFFIX);
+	public static void reEncryptAllFiles(SQLiteDatabase db, String oldKey, String newKey) {
+		StringBuilder path = new StringBuilder(db.getPath()).append(EXTERNAL_BLOBS_SUFFIX);
+		File dir = new File(path.toString());
 		if (dir.exists()) {
-			final File[] tables = dir.listFiles();
+			File[] tables = dir.listFiles();
 			if (tables != null) {
-				for (final File table : tables) {
-					final File[] blobs = table.listFiles();
+				for (File table : tables) {
+					File[] blobs = table.listFiles();
 					if (blobs != null) {
-						for (final File blob : blobs) {
-							String result;
+						for (File blob : blobs) {
+							StringBuilder json = new StringBuilder();
+							String result = null;
 							try {
-								String json = Encryptor.getStringFromFile(blob);
-								result = Encryptor.decrypt(json, oldKey);
+								BufferedReader br = new BufferedReader(new FileReader(blob));
+								String line;
+								while ((line = br.readLine()) != null) {
+									json.append(line).append('\n');
+								}
+								br.close();
+								result = Encryptor.decrypt(json.toString(), oldKey);
 								blob.delete();
-								final FileOutputStream outputStream = new FileOutputStream(blob, false);
+								FileOutputStream outputStream = new FileOutputStream(blob, false);
 								outputStream.write(Encryptor.encrypt(result, newKey).getBytes());
 								outputStream.close();
 							} catch (IOException ex) {

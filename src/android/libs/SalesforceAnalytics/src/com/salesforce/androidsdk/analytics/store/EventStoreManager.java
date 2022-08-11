@@ -36,13 +36,13 @@ import com.salesforce.androidsdk.analytics.util.SalesforceAnalyticsLogger;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FilenameFilter;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
 import java.util.List;
-
-import io.paperdb.Book;
-import io.paperdb.Paper;
 
 /**
  * Provides APIs to store events in an encrypted store on the filesystem.
@@ -52,15 +52,15 @@ import io.paperdb.Paper;
  */
 public class EventStoreManager {
 
-    private static final String FILENAME = "event_store";
     private static final String TAG = "EventStoreManager";
 
-    private final Context context;
-    private final String encryptionKey;
-    private final Book book;
+    private String filenameSuffix;
+    private File rootDir;
+    private EventFileFilter fileFilter;
+    private Context context;
+    private String encryptionKey;
     private boolean isLoggingEnabled = true;
-    private int maxEvents = 10000;
-    private Integer countEvents = null; // null means not calculated yet
+    private int maxEvents = 1000;
 
     /**
      * Parameterized constructor.
@@ -71,9 +71,11 @@ public class EventStoreManager {
      * @param encryptionKey Encryption key (must be Base 64 encoded).
      */
     public EventStoreManager(String filenameSuffix, Context context, String encryptionKey) {
+        this.filenameSuffix = filenameSuffix;
         this.context = context;
         this.encryptionKey = encryptionKey;
-        book = Paper.bookOn(context.getFilesDir().getAbsolutePath(), FILENAME + filenameSuffix);
+        fileFilter = new EventFileFilter(filenameSuffix);
+        rootDir = context.getFilesDir();
     }
 
     /**
@@ -90,11 +92,15 @@ public class EventStoreManager {
         if (!shouldStoreEvent()) {
             return;
         }
-
-        book.write(event.getEventId(), encrypt(event.toJson().toString()));
-        // getNumStoredEvents() returns countEvents if known
-        // otherwise it counts the keys in the book (and store the count in countEvents)
-        countEvents = getNumStoredEvents() + 1;
+        final String filename = event.getEventId() + filenameSuffix;
+        FileOutputStream outputStream;
+        try {
+            outputStream = context.openFileOutput(filename, Context.MODE_PRIVATE);
+            outputStream.write(encrypt(event.toJson().toString()).getBytes());
+            outputStream.close();
+        } catch (Exception e) {
+            SalesforceAnalyticsLogger.e(context, TAG, "Exception occurred while saving event to filesystem", e);
+        }
     }
 
     /**
@@ -116,7 +122,7 @@ public class EventStoreManager {
     }
 
     /**
-     * Returns a specific event stored on the filesystem for that unique identifier.
+     * Returns a specific event stored on the filesystem.
      *
      * @param eventId Unique identifier for the event.
      * @return Event.
@@ -126,69 +132,26 @@ public class EventStoreManager {
             SalesforceAnalyticsLogger.e(context, TAG, "Invalid event ID supplied: " + eventId);
             return null;
         }
-        InstrumentationEvent event = null;
-        String encryptedEvent = null;
-        try {
-            encryptedEvent = book.read(eventId, null);
-        } catch (Exception e) {
-            SalesforceAnalyticsLogger.e(context, TAG, "Exception occurred while attempting to read event from PaperDB", e);
-        }
-        if (!TextUtils.isEmpty(encryptedEvent)) {
-            final String decryptedEvent = decrypt(encryptedEvent);
-            if (!TextUtils.isEmpty(decryptedEvent)) {
-                try {
-                    final JSONObject jsonObject = new JSONObject(decryptedEvent);
-                    event = new InstrumentationEvent(jsonObject);
-                } catch (JSONException e) {
-                    SalesforceAnalyticsLogger.e(context, TAG, "Exception occurred while attempting to convert to JSON", e);
-                }
-            }
-        }
-        return event;
+        final String filename = eventId + filenameSuffix;
+        final File file = new File(rootDir, filename);
+        return fetchEvent(file);
     }
 
     /**
-     * Returns all the events stored on the filesystem.
+     * Returns all the events stored on the filesystem for that unique identifier.
      *
      * @return List of events.
      */
     public List<InstrumentationEvent> fetchAllEvents() {
+        final List<File> files = getAllFiles();
         final List<InstrumentationEvent> events = new ArrayList<>();
-        for (InstrumentationEvent event : iterateAllEvents()) {
+        for (final File file : files) {
+            final InstrumentationEvent event = fetchEvent(file);
             if (event != null) {
                 events.add(event);
             }
         }
         return events;
-    }
-
-    /**
-     * Streams all the events stored on the filesystem. Will load each
-     * event into memory one at a time to decrease memory impact.
-     *
-     * @return Iterable of events.
-     */
-    public Iterable<InstrumentationEvent> iterateAllEvents() {
-        return new Iterable<InstrumentationEvent>() {
-            private final List<String> eventIds = book.getAllKeys();
-
-            @Override
-            public Iterator<InstrumentationEvent> iterator() {
-                return new Iterator<InstrumentationEvent>() {
-                    private final Iterator<String> eventIdIterator = eventIds.iterator();
-
-                    @Override
-                    public boolean hasNext() {
-                        return eventIdIterator.hasNext();
-                    }
-
-                    @Override
-                    public InstrumentationEvent next() {
-                        return fetchEvent(eventIdIterator.next());
-                    }
-                };
-            }
-        };
     }
 
     /**
@@ -198,22 +161,19 @@ public class EventStoreManager {
      * @return True - if successful, False - otherwise.
      */
     public boolean deleteEvent(String eventId) {
-        book.delete(eventId);
-        boolean successfullyDeleted = !book.contains(eventId);
-
-        if (successfullyDeleted) {
-            // getNumStoredEvents() returns countEvents if known
-            // otherwise it counts the keys in the book (and store the count in countEvents)
-            countEvents = getNumStoredEvents() - 1;
+        if (TextUtils.isEmpty(eventId)) {
+            SalesforceAnalyticsLogger.e(context, TAG, "Invalid event ID supplied: " + eventId);
+            return false;
         }
-
-        return successfullyDeleted;
+        final String filename = eventId + filenameSuffix;
+        final File file = new File(rootDir, filename);
+        return file.delete();
     }
 
     /**
      * Deletes the events stored on the filesystem for that unique identifier.
      */
-    public void deleteEvents(Collection<String> eventIds) {
+    public void deleteEvents(List<String> eventIds) {
         if (eventIds == null || eventIds.size() == 0) {
             SalesforceAnalyticsLogger.d(context, TAG, "No events to delete");
             return;
@@ -227,8 +187,33 @@ public class EventStoreManager {
      * Deletes all the events stored on the filesystem for that unique identifier.
      */
     public void deleteAllEvents() {
-        book.destroy();
-        countEvents = 0;
+        final List<File> files = getAllFiles();
+        for (final File file : files) {
+            file.delete();
+        }
+    }
+
+    /**
+     * Changes the encryption key to a new value. Fetches all stored events
+     * and re-encrypts them with the new encryption key.
+     *
+     * @param oldKey Old encryption key.
+     * @param newKey New encryption key.
+     */
+    public void changeEncryptionKey(String oldKey, String newKey) {
+
+        /*
+         * We need to disable logging while the upgrade is in progress to
+         * prevent rogue threads from attempting to write data with the old key.
+         */
+        boolean logEnabledStatus = isLoggingEnabled;
+        isLoggingEnabled = false;
+        encryptionKey = oldKey;
+        final List<InstrumentationEvent> storedEvents = fetchAllEvents();
+        deleteAllEvents();
+        encryptionKey = newKey;
+        storeEvents(storedEvents);
+        isLoggingEnabled = logEnabledStatus;
     }
 
     /**
@@ -271,20 +256,65 @@ public class EventStoreManager {
     /**
      * Returns number of stored events.
      *
-     * Counts the keys in the book (and store the count in countEvents) if countEvents if null.
-     * Returns countEvents directly if known (i.e. not null)
-     *
      * @return Number of stored events.
      */
     public int getNumStoredEvents() {
-        if (countEvents == null) {
-            countEvents = book.getAllKeys().size();
+        int numFiles = 0;
+        final File[] listOfFiles = rootDir.listFiles();
+        if (listOfFiles != null) {
+            numFiles = listOfFiles.length;
         }
-        return countEvents;
+        return numFiles;
     }
 
     private boolean shouldStoreEvent() {
-        return (isLoggingEnabled && (getNumStoredEvents() < maxEvents));
+        final List<File> files = getAllFiles();
+        int fileCount = 0;
+        if (files != null) {
+            fileCount = files.size();
+        }
+        return (isLoggingEnabled && (fileCount < maxEvents));
+    }
+
+    private InstrumentationEvent fetchEvent(File file) {
+        if (file == null || !file.exists()) {
+            SalesforceAnalyticsLogger.e(context, TAG, "File does not exist");
+            return null;
+        }
+        InstrumentationEvent event = null;
+        String eventString = null;
+        final StringBuilder json = new StringBuilder();
+        try {
+            final BufferedReader br = new BufferedReader(new FileReader(file));
+            String line;
+            while ((line = br.readLine()) != null) {
+                json.append(line).append('\n');
+            }
+            br.close();
+            eventString = decrypt(json.toString());
+        } catch (Exception ex) {
+            SalesforceAnalyticsLogger.e(context, TAG, "Exception occurred while attempting to read file contents", ex);
+        }
+        if (!TextUtils.isEmpty(eventString)) {
+            try {
+                final JSONObject jsonObject = new JSONObject(eventString);
+                event = new InstrumentationEvent(jsonObject);
+            } catch (JSONException e) {
+                SalesforceAnalyticsLogger.e(context, TAG, "Exception occurred while attempting to convert to JSON", e);
+            }
+        }
+        return event;
+    }
+
+    private List<File> getAllFiles() {
+        final List<File> files = new ArrayList<>();
+        final File[] listOfFiles = rootDir.listFiles();
+        for (final File file : listOfFiles) {
+            if (file != null && fileFilter.accept(rootDir, file.getName())) {
+                files.add(file);
+            }
+        }
+        return files;
     }
 
     private String encrypt(String data) {
@@ -293,5 +323,32 @@ public class EventStoreManager {
 
     private String decrypt(String data) {
         return Encryptor.decrypt(data, encryptionKey);
+    }
+
+    /**
+     * This class acts as a filter to identify only the relevant event files.
+     *
+     * @author bhariharan
+     */
+    private static class EventFileFilter implements FilenameFilter {
+
+        private String fileSuffix;
+
+        /**
+         * Parameterized constructor.
+         *
+         * @param fileSuffix Filename suffix.
+         */
+        public EventFileFilter(String fileSuffix) {
+            this.fileSuffix = fileSuffix;
+        }
+
+        @Override
+        public boolean accept(File dir, String filename) {
+            if (filename != null && filename.endsWith(fileSuffix)) {
+                return true;
+            }
+            return false;
+        }
     }
 }

@@ -34,7 +34,7 @@ import com.salesforce.androidsdk.accounts.UserAccountManager;
 import com.salesforce.androidsdk.app.SalesforceSDKManager;
 import com.salesforce.androidsdk.rest.ClientManager;
 import com.salesforce.androidsdk.rest.RestClient;
-import com.salesforce.androidsdk.security.ScreenLockManager;
+import com.salesforce.androidsdk.security.PasscodeManager;
 import com.salesforce.androidsdk.util.EventsObservable;
 import com.salesforce.androidsdk.util.LogoutCompleteReceiver;
 import com.salesforce.androidsdk.util.UserSwitchReceiver;
@@ -45,8 +45,8 @@ import com.salesforce.androidsdk.util.UserSwitchReceiver;
 
 public class SalesforceActivityDelegate {
 
-    private final Activity activity;
-    private ScreenLockManager screenLockManager;
+    private Activity activity;
+    private PasscodeManager passcodeManager;
     private UserSwitchReceiver userSwitchReceiver;
     private LogoutCompleteReceiver logoutCompleteReceiver;
 
@@ -56,7 +56,8 @@ public class SalesforceActivityDelegate {
     }
 
     public void onCreate() {
-        screenLockManager = SalesforceSDKManager.getInstance().getScreenLockManager();
+        // Gets an instance of the passcode manager.
+        passcodeManager = SalesforceSDKManager.getInstance().getPasscodeManager();
         userSwitchReceiver = new ActivityUserSwitchReceiver();
         activity.registerReceiver(userSwitchReceiver, new IntentFilter(UserAccountManager.USER_SWITCH_INTENT_ACTION));
         logoutCompleteReceiver = new ActivityLogoutCompleteReceiver();
@@ -67,46 +68,50 @@ public class SalesforceActivityDelegate {
     }
 
     /**
-     * Brings up ScreenLock if needed
+     * Brings up passcode screen if needed
      * Build RestClient if requested and then calls activity.onResume(restClient)
      * Otherwise calls activity.onResume(null)
      *
      * @param buildRestClient
      */
     public void onResume(boolean buildRestClient) {
-        // Brings up the ScreenLock if needed.
-        if (buildRestClient) {
-            // Gets login options.
-            final String accountType = SalesforceSDKManager.getInstance().getAccountType();
-            final ClientManager.LoginOptions loginOptions = SalesforceSDKManager.getInstance().getLoginOptions();
+        // Brings up the passcode screen if needed.
+        if (passcodeManager.onResume(activity)) {
+            if (buildRestClient) {
+                // Gets login options.
+                final String accountType = SalesforceSDKManager.getInstance().getAccountType();
+                final ClientManager.LoginOptions loginOptions = SalesforceSDKManager.getInstance().getLoginOptions();
 
-            // Gets a rest client.
-            new ClientManager(
-                    SalesforceSDKManager.getInstance().getAppContext(),
-                    accountType,
-                    loginOptions,
-                    SalesforceSDKManager.getInstance().shouldLogoutWhenTokenRevoked()
-            ).getRestClient(activity, new ClientManager.RestClientCallback() {
+                // Gets a rest client.
+                new ClientManager(activity, accountType, loginOptions,
+                        SalesforceSDKManager.getInstance().shouldLogoutWhenTokenRevoked()).getRestClient(activity, new ClientManager.RestClientCallback() {
 
-                @Override
-                public void authenticatedRestClient(RestClient client) {
-                    if (client == null) {
-                        SalesforceSDKManager.getInstance().logout(activity);
-                        return;
+                    @Override
+                    public void authenticatedRestClient(RestClient client) {
+                        if (client == null) {
+                            SalesforceSDKManager.getInstance().logout(activity);
+                            return;
+                        }
+                        ((SalesforceActivityInterface) activity).onResume(client);
+
+                        // Lets observers know that rendition is complete.
+                        EventsObservable.get().notifyEvent(EventsObservable.EventType.RenditionComplete);
                     }
-                    ((SalesforceActivityInterface) activity).onResume(client);
-
-                    // Lets observers know that rendition is complete.
-                    EventsObservable.get().notifyEvent(EventsObservable.EventType.RenditionComplete);
-                }
-            });
-        }
-        else {
-            ((SalesforceActivityInterface) activity).onResume(null);
+                });
+            }
+            else {
+                ((SalesforceActivityInterface) activity).onResume(null);
+            }
         }
     }
 
-    public void onPause() { }
+    public void onUserInteraction() {
+        passcodeManager.recordUserInteraction();
+    }
+
+    public void onPause() {
+        passcodeManager.onPause(activity);
+    }
 
     public void onDestroy() {
         activity.unregisterReceiver(userSwitchReceiver);

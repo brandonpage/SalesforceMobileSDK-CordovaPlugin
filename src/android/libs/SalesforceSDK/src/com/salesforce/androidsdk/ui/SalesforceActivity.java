@@ -54,6 +54,11 @@ public abstract class SalesforceActivity extends Activity implements SalesforceA
 		delegate.onResume(true);
 	}
 
+	@Override
+	public void onUserInteraction() {
+		delegate.onUserInteraction();
+	}
+
     @Override
     public void onPause() {
         super.onPause();

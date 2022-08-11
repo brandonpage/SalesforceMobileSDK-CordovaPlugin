@@ -26,18 +26,12 @@
  */
 package com.salesforce.androidsdk.util;
 
-import android.content.Intent;
 import android.text.TextUtils;
 
-import com.salesforce.androidsdk.app.SalesforceSDKManager;
 import com.salesforce.androidsdk.auth.HttpAccess;
 import com.salesforce.androidsdk.rest.RestResponse;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import okhttp3.Request;
 import okhttp3.Response;
@@ -48,9 +42,6 @@ import okhttp3.Response;
  * @author bhariharan
  */
 public class AuthConfigUtil {
-
-    public static final String AUTH_CONFIG_COMPLETE_INTENT_ACTION = "com.salesforce.AUTH_CONFIG_COMPLETE";
-    public static final String WAS_REQUEST_SUCCESSFUL_EXTRA = "com.salesforce.WAS_REQUEST_SUCCESSFUL";
 
     private static final String FORWARD_SLASH = "/";
     private static final String MY_DOMAIN_AUTH_CONFIG_ENDPOINT = "/.well-known/auth-configuration";
@@ -75,15 +66,12 @@ public class AuthConfigUtil {
         final Request request = new Request.Builder().url(authConfigUrl).get().build();
         try {
             final Response response = HttpAccess.DEFAULT.getOkHttpClient().newCall(request).execute();
-            if (response.isSuccessful()) {
+            if (response != null && response.isSuccessful()) {
                 authConfig = new MyDomainAuthConfig((new RestResponse(response)).asJSONObject());
             }
         } catch (Exception e) {
             SalesforceSDKLogger.e(TAG, "Auth config request was not successful", e);
         }
-        final Intent intent = new Intent(AUTH_CONFIG_COMPLETE_INTENT_ACTION);
-        intent.putExtra(WAS_REQUEST_SUCCESSFUL_EXTRA, authConfig != null);
-        SalesforceSDKManager.getInstance().getAppContext().sendBroadcast(intent);
         return authConfig;
     }
 
@@ -96,16 +84,9 @@ public class AuthConfigUtil {
 
         private static final String MOBILE_SDK_KEY = "MobileSDK";
         private static final String USE_NATIVE_BROWSER_KEY = "UseAndroidNativeBrowserForAuthentication";
-        private static final String SAML_PROVIDERS_KEY = "SamlProviders";
-        private static final String AUTH_PROVIDERS_KEY = "AuthProviders";
-        private static final String SSO_URL_KEY = "SsoUrl";
-        private static final String LOGIN_PAGE_KEY = "LoginPage";
-        private static final String LOGIN_PAGE_URL_KEY = "LoginPageUrl";
 
-        private final JSONObject authConfig;
+        private JSONObject authConfig;
         private boolean browserLoginEnabled;
-        private List<String> ssoUrls;
-        private String loginPageUrl;
 
         /**
          * Parameterized constructor.
@@ -114,44 +95,10 @@ public class AuthConfigUtil {
          */
         public MyDomainAuthConfig(JSONObject authConfig) {
             this.authConfig = authConfig;
-            ssoUrls = new ArrayList<>();
             if (authConfig != null) {
                 final JSONObject mobileSDK = authConfig.optJSONObject(MOBILE_SDK_KEY);
                 if (mobileSDK != null) {
                     browserLoginEnabled = mobileSDK.optBoolean(USE_NATIVE_BROWSER_KEY);
-                }
-
-                // Parses SAML provider list and adds it to the list of SSO URLs.
-                final JSONArray samlProviders = authConfig.optJSONArray(SAML_PROVIDERS_KEY);
-                if (samlProviders != null && samlProviders.length() > 0) {
-                    for (int i = 0; i < samlProviders.length(); i++) {
-                        final JSONObject provider = samlProviders.optJSONObject(i);
-                        if (provider != null) {
-                            final String ssoUrl = provider.optString(SSO_URL_KEY);
-                            if (!TextUtils.isEmpty(ssoUrl)) {
-                                ssoUrls.add(ssoUrl);
-                            }
-                        }
-                    }
-                }
-
-                // Parses auth provider list and adds it to the list of SSO URLs.
-                final JSONArray authProviders = authConfig.optJSONArray(AUTH_PROVIDERS_KEY);
-                if (authProviders != null && authProviders.length() > 0) {
-                    for (int i = 0; i < authProviders.length(); i++) {
-                        final JSONObject provider = authProviders.optJSONObject(i);
-                        if (provider != null) {
-                            final String ssoUrl = provider.optString(SSO_URL_KEY);
-                            if (!TextUtils.isEmpty(ssoUrl)) {
-                                ssoUrls.add(ssoUrl);
-                            }
-                        }
-                    }
-                }
-                ssoUrls = (ssoUrls.size() > 0) ? ssoUrls : null;
-                final JSONObject loginPageConfig = authConfig.optJSONObject(LOGIN_PAGE_KEY);
-                if (loginPageConfig != null) {
-                    loginPageUrl = loginPageConfig.optString(LOGIN_PAGE_URL_KEY);
                 }
             }
         }
@@ -172,24 +119,6 @@ public class AuthConfigUtil {
          */
         public boolean isBrowserLoginEnabled() {
             return browserLoginEnabled;
-        }
-
-        /**
-         * Returns the configured SSO URLs.
-         *
-         * @return Configured SSO URLs.
-         */
-        public List<String> getSsoUrls() {
-            return ssoUrls;
-        }
-
-        /**
-         * Returns the configured login page URL.
-         *
-         * @return Configured login page URL.
-         */
-        public String getLoginPageUrl() {
-            return loginPageUrl;
         }
     }
 }

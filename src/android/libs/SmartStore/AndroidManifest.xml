@@ -2,18 +2,17 @@
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
 	package="com.salesforce.androidsdk.smartstore"
-	android:versionCode="78"
-	android:versionName="10.2.0.dev">
+	android:versionCode="62"
+	android:versionName="7.0.0.dev">
+
+    <uses-sdk android:minSdkVersion="21"
+        android:targetSdkVersion="27" />
 
 	<application>
 
         <!--  SmartStore Inspector screen -->
         <activity android:name="com.salesforce.androidsdk.smartstore.ui.SmartStoreInspectorActivity"
-			android:theme="@style/SalesforceSDK"
-			android:exported="false"/>
-		<!--  Key Value Store Inspector screen -->
-		<activity android:name="com.salesforce.androidsdk.smartstore.ui.KeyValueStoreInspectorActivity"
-			android:theme="@style/SalesforceSDK"
+			android:theme="@style/SalesforceSDK.ActionBarTheme"
 			android:exported="false"/>
 	</application>
 </manifest>

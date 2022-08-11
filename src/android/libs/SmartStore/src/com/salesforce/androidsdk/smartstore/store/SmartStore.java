@@ -28,24 +28,29 @@ package com.salesforce.androidsdk.smartstore.store;
 
 import android.content.ContentValues;
 import android.database.Cursor;
+import android.support.annotation.NonNull;
 import android.text.TextUtils;
-import androidx.annotation.NonNull;
+
 import com.salesforce.androidsdk.analytics.EventBuilderHelper;
 import com.salesforce.androidsdk.app.SalesforceSDKManager;
 import com.salesforce.androidsdk.smartstore.store.LongOperation.LongOperationType;
 import com.salesforce.androidsdk.smartstore.store.QuerySpec.QueryType;
 import com.salesforce.androidsdk.smartstore.util.SmartStoreLogger;
+import com.salesforce.androidsdk.util.JSONObjectHelper;
+
+import net.sqlcipher.database.SQLiteDatabase;
+import net.sqlcipher.database.SQLiteOpenHelper;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import net.sqlcipher.database.SQLiteDatabase;
-import net.sqlcipher.database.SQLiteOpenHelper;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 /**
  * Smart store
@@ -57,25 +62,34 @@ import org.json.JSONObject;
  */
 public class SmartStore  {
 
+    // Default
+    public static final int DEFAULT_PAGE_SIZE = 10;
 	private static final String TAG = "SmartStore";
 
+	/**
+	 * Table to keep track of soup names.
+	 *
+	 * @deprecated This has been deprecated as table has been renamed to {@link #SOUP_ATTRS_TABLE}
+	 */
+    protected static final String SOUP_NAMES_TABLE = "soup_names";
+
 	// Table to keep track of soup names and attributes.
-	public static final String SOUP_ATTRS_TABLE = "soup_attrs";
+	protected static final String SOUP_ATTRS_TABLE = "soup_attrs";
 
 	// Fts table suffix
 	public static final String FTS_SUFFIX = "_fts";
 
 	// Table to keep track of soup's index specs
-    public static final String SOUP_INDEX_MAP_TABLE = "soup_index_map";
+    protected static final String SOUP_INDEX_MAP_TABLE = "soup_index_map";
 
     // Table to keep track of status of long operations in flight
     protected static final String LONG_OPERATIONS_STATUS_TABLE = "long_operations_status";
 
     // Columns of the soup index map table
-    public static final String SOUP_NAME_COL = "soupName";
-    public static final String PATH_COL = "path";
+    protected static final String SOUP_NAME_COL = "soupName";
+    protected static final String PATH_COL = "path";
     protected static final String COLUMN_NAME_COL = "columnName";
-    public static final String COLUMN_TYPE_COL = "columnType";
+    protected static final String COLUMN_TYPE_COL = "columnType";
 
     // Columns of a soup table
     protected static final String ID_COL = "id";
@@ -121,8 +135,8 @@ public class SmartStore  {
      */
     public static synchronized void changeKey(SQLiteDatabase db, String oldKey, String newKey) {
     	synchronized(db) {
-	        if (!TextUtils.isEmpty(newKey)) {
-	            DBOpenHelper.changeKey(db, oldKey, newKey);
+	        if (newKey != null && !newKey.trim().equals("")) {
+	            db.execSQL("PRAGMA rekey = '" + newKey + "'");
 	            DBOpenHelper.reEncryptAllFiles(db, oldKey, newKey);
 	        }
     	}
@@ -191,6 +205,14 @@ public class SmartStore  {
     }
 
     /**
+     * @param db
+     */
+    @Deprecated
+    public SmartStore(SQLiteDatabase db) {
+        this.dbLocal = db;
+    }
+
+    /**
      * Relies on SQLiteOpenHelper for database handling.
      *
      * @param dbOpenHelper DB open helper.
@@ -200,15 +222,6 @@ public class SmartStore  {
     	this.dbOpenHelper = dbOpenHelper;
         this.encryptionKey = encryptionKey;
     }
-
-	/**
-	 * Package-level constructor. Should be used in tests only.
-	 *
-	 * @param db Database.
-	 */
-	SmartStore(SQLiteDatabase db) {
-		this.dbLocal = db;
-	}
 
     /**
      * Return db
@@ -241,8 +254,6 @@ public class SmartStore  {
      * Get database size
      */
     public int getDatabaseSize() {
-		// With WAL enabled we must force a WAL checkpoint if we want the actual DB file size.
-		getDatabase().query("PRAGMA wal_checkpoint(FULL);").moveToNext();
     	int size =  (int) (new File(getDatabase().getPath()).length()); // XXX That cast will be trouble if the file is more than 2GB
     	if (dbOpenHelper instanceof DBOpenHelper) {
     		size += ((DBOpenHelper) dbOpenHelper).getSizeOfDir(null);
@@ -293,10 +304,7 @@ public class SmartStore  {
 	 * Create rows in soup index map table for indexSpecs
 	 * @param soupSpec
 	 * @param indexSpecs
-	 *
-	 * Deprecated: we are removing external storage and soup spec in 11.0 - use registerSoup(String soupName, IndexSpec[] indexSpecs) instead
 	 */
-	@Deprecated
 	public void registerSoupWithSpec(final SoupSpec soupSpec, final IndexSpec[] indexSpecs) {
 		final SQLiteDatabase db = getDatabase();
 		synchronized (db) {
@@ -551,10 +559,7 @@ public class SmartStore  {
 	 * @param indexSpecs array of index specs
 	 * @param reIndexData
 	 * @throws JSONException
-	 *
-	 * Deprecated: we are removing external storage and soup spec in 11.0 - use alterSoup(String soupName, IndexSpec[] indexSpecs) instead
 	 */
-	@Deprecated
 	public void alterSoup(String soupName, SoupSpec soupSpec, IndexSpec[] indexSpecs,
 			boolean reIndexData) throws JSONException {
 		AlterSoupLongOperation operation = new AlterSoupLongOperation(this, soupName, soupSpec, indexSpecs, reIndexData);
@@ -662,20 +667,6 @@ public class SmartStore  {
 	        if (soupTableName == null) throw new SmartStoreException("Soup: " + soupName + " does not exist");
 	        return DBHelper.getInstance(db).getIndexSpecs(db, soupName);
     	}
-	}
-
-	/**
-	 * Return true if the given path is indexed on the given soup
-	 *
-	 * @param soupName
-	 * @param path
-	 * @return
-	 */
-	public boolean hasIndexForPath(String soupName, String path) {
-		final SQLiteDatabase db = getDatabase();
-		synchronized(db) {
-			return DBHelper.getInstance(db).hasIndexForPath(db, soupName, path);
-		}
 	}
 
 	/**
@@ -792,10 +783,7 @@ public class SmartStore  {
 	 * Returns the entire SoupSpec of the given soup.
 	 * @param soupName
 	 * @return SoupSpec for given soup name.
-	 *
-	 * Deprecated: we are removing external storage and soup spec in 11.0
 	 */
-	@Deprecated
 	public SoupSpec getSoupSpec(String soupName) {
 		final SQLiteDatabase db = getDatabase();
 		List<String> features = DBHelper.getInstance(db).getFeatures(db, soupName);
@@ -803,234 +791,91 @@ public class SmartStore  {
 	}
 
     /**
-	 * Run a query given by its query spec
-	 * Returns results from selected page
-	 *
-	 * @param querySpec the query to run
-	 * @param pageIndex the page to return
+	 * Run a query given by its query Spec, only returned results from selected page
+	 * @param querySpec
+	 * @param pageIndex
      * @throws JSONException
 	 */
 	public JSONArray query(QuerySpec querySpec, int pageIndex) throws JSONException {
-		return queryWithArgs(querySpec, pageIndex, null);
-	}
-
-	/**
-	 * Run a query given by its query spec with optional "where args" (i.e. bind args)
-     * Provided bind args will be substituted to the ? found in the query
-	 * NB: Bind args are only supported for smart queries
-	 * Returns results from selected page
-	 *
-	 * @param querySpec the query to run
-	 * @param pageIndex the page to return
-	 * @param whereArgs the bind args (optional - only supported for smart queries)
-	 *
-	 * @throws JSONException
-	 */
-	public JSONArray queryWithArgs(QuerySpec querySpec, int pageIndex, String... whereArgs) throws JSONException {
-		if (whereArgs != null && querySpec.queryType != QueryType.smart) {
-			throw new SmartStoreException("whereArgs can only be provided for smart queries");
-		}
-
-		JSONArray resultAsArray = new JSONArray();
-		runQuery(resultAsArray, null, querySpec, pageIndex, whereArgs);
-		return resultAsArray;
-	}
-	/**
-	 * Run a query given by its query Spec
-	 * Returns results from selected page without deserializing any JSON
-	 *
-	 * @param resultBuilder string builder to which results are appended
-	 * @param querySpec
-	 * @param pageIndex
-	 */
-	public void queryAsString(StringBuilder resultBuilder, QuerySpec querySpec, int pageIndex) {
-		try {
-			runQuery(null, resultBuilder, querySpec, pageIndex, null);
-		}
-		catch (JSONException e) {
-			// shouldn't happen since we call runQuery with a string builder
-			throw new SmartStoreException("Unexpected json exception", e);
-		}
-	}
-
-	private void runQuery(JSONArray resultAsArray, StringBuilder resultAsStringBuilder, QuerySpec querySpec, int pageIndex, String... whereArgs) throws JSONException {
-		boolean computeResultAsString = resultAsStringBuilder != null;
-
 		final SQLiteDatabase db = getDatabase();
-		synchronized(db) {
+    	synchronized(db) {
 			QueryType qt = querySpec.queryType;
-			String sql = convertSmartSql(querySpec.smartSql);
+	    	String sql = convertSmartSql(querySpec.smartSql);
 
-			// Page
-			int offsetRows = querySpec.pageSize * pageIndex;
-			int numberRows = querySpec.pageSize;
-			String limit = offsetRows + "," + numberRows;
-			Cursor cursor = null;
-			try {
-				cursor = DBHelper.getInstance(db).limitRawQuery(db, sql, limit, querySpec.getArgs() != null ? querySpec.getArgs() : whereArgs);
-
-				if (computeResultAsString) {
-					resultAsStringBuilder.append("[");
-				}
-
-				int currentRow = 0;
-				if (cursor.moveToFirst()) {
-					do {
-						if (computeResultAsString && currentRow > 0) {
-							resultAsStringBuilder.append(", ");
-						}
-						currentRow++;
-
-						// Smart queries
-						if (qt == QueryType.smart || querySpec.selectPaths != null) {
-							if (computeResultAsString) {
-								getDataFromRow(null, resultAsStringBuilder, cursor);
-							}
-							else {
-								JSONArray rowArray = new JSONArray();
-								getDataFromRow(rowArray, null, cursor);
-								resultAsArray.put(rowArray);
-							}
-						}
-						// Exact/like/range queries
-						else {
-							String rowAsString = null;
-							if (cursor.getColumnIndex(SoupSpec.FEATURE_EXTERNAL_STORAGE) >= 0) {
+	        // Page
+	        int offsetRows = querySpec.pageSize * pageIndex;
+	        int numberRows = querySpec.pageSize;
+	        String limit = offsetRows + "," + numberRows;
+	    	Cursor cursor = null;
+	    	try {
+	    		cursor = DBHelper.getInstance(db).limitRawQuery(db, sql, limit, querySpec.getArgs());
+	            JSONArray results = new JSONArray();
+	            if (cursor.moveToFirst()) {
+	                do {
+	                	// Smart queries
+	                	if (qt == QueryType.smart || querySpec.selectPaths != null) {
+	                		results.put(getDataFromRow(cursor));
+	                	}
+	            		// Exact/like/range queries
+	                	else {
+	                		if (cursor.getColumnIndex(SoupSpec.FEATURE_EXTERNAL_STORAGE) >= 0) {
 								// Presence of external storage column implies we must fetch from storage. Soup name and entry id values can be extracted
 								String soupTableName = cursor.getString(cursor.getColumnIndex(SoupSpec.FEATURE_EXTERNAL_STORAGE));
 								Long soupEntryId = cursor.getLong(cursor.getColumnIndex(SmartStore.SOUP_ENTRY_ID));
-								rowAsString = ((DBOpenHelper) dbOpenHelper).loadSoupBlobAsString(soupTableName, soupEntryId, encryptionKey);
-							} else {
-								rowAsString = cursor.getString(0);
-							}
-
-							if (computeResultAsString) {
-								resultAsStringBuilder.append(rowAsString);
-							}
-							else {
-								resultAsArray.put(new JSONObject(rowAsString));
-							}
-						}
-					} while (cursor.moveToNext());
-				}
-				if (computeResultAsString) {
-					resultAsStringBuilder.append("]");
-				}
-
-			} finally {
-				safeClose(cursor);
-			}
-		}
+								results.put(((DBOpenHelper) dbOpenHelper).loadSoupBlob(soupTableName, soupEntryId, encryptionKey));
+	                		} else {
+								results.put(new JSONObject(cursor.getString(0)));
+	                		}
+	                	}
+	                } while (cursor.moveToNext());
+	            }
+	            return results;
+	    	} finally {
+	    		safeClose(cursor);
+	    	}
+    	}
 	}
 
-	private void getDataFromRow(JSONArray resultAsArray, StringBuilder resultAsStringBuilder, Cursor cursor) throws JSONException {
-		boolean computeResultAsString = resultAsStringBuilder != null;
+
+	/**
+	 * Return JSONArray for one row of data from cursor
+	 * @param cursor
+	 * @return
+	 * @throws JSONException
+	 */
+	private JSONArray getDataFromRow(Cursor cursor) throws JSONException {
+		JSONArray row = new JSONArray();
 		int columnCount = cursor.getColumnCount();
-		if (computeResultAsString) {
-			resultAsStringBuilder.append("[");
-		}
 		for (int i=0; i<columnCount; i++) {
-			if (computeResultAsString && i > 0) {
-				resultAsStringBuilder.append(",");
-			}
-			int valueType = cursor.getType(i);
+            int valueType = cursor.getType(i);
 			String columnName = cursor.getColumnName(i);
-			if (valueType == Cursor.FIELD_TYPE_NULL) {
-				if (computeResultAsString) {
-					resultAsStringBuilder.append("null");
-				} else {
-					resultAsArray.put(null);
-				}
-			}
-			else if (valueType == Cursor.FIELD_TYPE_STRING) {
-				String raw = cursor.getString(i);
-				if (columnName.equals(SoupSpec.FEATURE_EXTERNAL_STORAGE)) {
-					// Presence of external storage column implies we must fetch from storage. Soup name and entry id values can be extracted
-					String soupTableName = cursor.getString(i);
-					Long soupEntryId = cursor.getLong(i + 1);
-					if (computeResultAsString) {
-						resultAsStringBuilder.append(((DBOpenHelper) dbOpenHelper).loadSoupBlobAsString(soupTableName, soupEntryId, encryptionKey));
-					} else {
-						resultAsArray.put(((DBOpenHelper) dbOpenHelper).loadSoupBlob(soupTableName, soupEntryId, encryptionKey));
-					}
-					i++; // skip next column (_soupEntryId)
-				} else if (columnName.equals(SOUP_COL) || columnName.startsWith(SOUP_COL + ":") /* :num is appended to column name when result set has more than one column with same name */) {
-					if (computeResultAsString) {
-						resultAsStringBuilder.append(raw);
-					} else {
-						resultAsArray.put(new JSONObject(raw));
-					}
-					// Note: we could end up returning a string if you aliased the column
-				}
-				else {
-					if (computeResultAsString) {
-						raw = escapeStringValue(raw);
-						resultAsStringBuilder.append("\"").append(raw).append("\"");
-					} else {
-						resultAsArray.put(raw);
-					}
-				}
-			}
-			else if (valueType == Cursor.FIELD_TYPE_INTEGER) {
-				if (computeResultAsString) {
-					resultAsStringBuilder.append(cursor.getLong(i));
-				} else {
-					resultAsArray.put(cursor.getLong(i));
-				}
-			}
-			else if (valueType == Cursor.FIELD_TYPE_FLOAT) {
-				if (computeResultAsString) {
-					resultAsStringBuilder.append(cursor.getDouble(i));
-				} else {
-					resultAsArray.put(cursor.getDouble(i));
-				}
-			}
+            if (valueType == Cursor.FIELD_TYPE_NULL) {
+                row.put(null);
+            }
+            else if (valueType == Cursor.FIELD_TYPE_STRING) {
+                String raw = cursor.getString(i);
+                if (columnName.equals(SoupSpec.FEATURE_EXTERNAL_STORAGE)) {
+                    // Presence of external storage column implies we must fetch from storage. Soup name and entry id values can be extracted
+                    String soupTableName = cursor.getString(i);
+                    Long soupEntryId = cursor.getLong(i + 1);
+                    row.put(((DBOpenHelper) dbOpenHelper).loadSoupBlob(soupTableName, soupEntryId, encryptionKey));
+                    i++; // skip next column (_soupEntryId)
+                } else if (columnName.equals(SOUP_COL) || columnName.startsWith(SOUP_COL + ":") /* :num is appended to column name when result set has more than one column with same name */) {
+                    row.put(new JSONObject(raw));
+                    // Note: we could end up returning a string if you aliased the column
+                }
+                else {
+                    row.put(raw);
+                }
+            }
+            else if (valueType == Cursor.FIELD_TYPE_INTEGER) {
+                row.put(cursor.getLong(i));
+            }
+            else if (valueType == Cursor.FIELD_TYPE_FLOAT) {
+                row.put(cursor.getDouble(i));
+            }
 		}
-		if (computeResultAsString) {
-			resultAsStringBuilder.append("]");
-		}
-	}
-
-	private String escapeStringValue(String raw) {
-		StringBuilder sb = new StringBuilder();
-
-		for (int i = 0; i < raw.length(); i ++) {
-			char c = raw.charAt(i);
-			switch (c) {
-				case '\\':
-				case '"':
-					sb.append('\\');
-					sb.append(c);
-					break;
-				case '/':
-					sb.append('\\');
-					sb.append(c);
-					break;
-				case '\b':
-					sb.append("\\b");
-					break;
-				case '\t':
-					sb.append("\\t");
-					break;
-				case '\n':
-					sb.append("\\n");
-					break;
-				case '\f':
-					sb.append("\\f");
-					break;
-				case '\r':
-					sb.append("\\r");
-					break;
-				default:
-					if (c < ' ') {
-						String t = "000" + Integer.toHexString(c);
-						sb.append("\\u" + t.substring(t.length() - 4));
-					} else {
-						sb.append(c);
-					}
-			}
-		}
-		return sb.toString();
+		return row;
 	}
 
 	/**
@@ -1453,10 +1298,10 @@ public class SmartStore  {
 	            db.beginTransaction();
 	        }
 	        try {
-				DBHelper.getInstance(db).delete(db, soupTableName, getSoupEntryIdsPredicate(soupEntryIds));
+	            db.delete(soupTableName, getSoupEntryIdsPredicate(soupEntryIds), (String []) null);
 
 				if (hasFTS(soupName)) {
-					DBHelper.getInstance(db).delete(db, soupTableName + FTS_SUFFIX, getRowIdsPredicate(soupEntryIds));
+					db.delete(soupTableName + FTS_SUFFIX, getRowIdsPredicate(soupEntryIds), (String[]) null);
 				}
 
 				if (usesExternalStorage(soupName) && dbOpenHelper instanceof DBOpenHelper) {
@@ -1524,10 +1369,10 @@ public class SmartStore  {
 					}
                 }
 
-				DBHelper.getInstance(db).delete(db, soupTableName, buildInStatement(ID_COL, subQuerySql), args);
+                db.delete(soupTableName, buildInStatement(ID_COL, subQuerySql), args);
 
 				if (hasFTS(soupName)) {
-					DBHelper.getInstance(db).delete(db, soupTableName + FTS_SUFFIX, buildInStatement(ROWID_COL, subQuerySql), args);
+                    db.delete(soupTableName + FTS_SUFFIX, buildInStatement(ROWID_COL, subQuerySql), args);
 				}
 
 				if (handleTx) {
@@ -1613,18 +1458,7 @@ public class SmartStore  {
 	 * projectIntoJson(json, "a.b.d.e") = [[1, 2], [3, 4]]                               // new in 4.1
 	 *
      */
-	public static Object project(JSONObject soup, String path) {
-		Object result = projectReturningNULLObject(soup, path);
-		return result == JSONObject.NULL ? null : result;
-	}
-
-	/**
-	 * Same as project but returns JSONObject.NULL if node found but without value and null if node not found
-	 * @param soup
-	 * @param path
-	 * @return
-	 */
-    public static Object projectReturningNULLObject(JSONObject soup, String path) {
+    public static Object project(JSONObject soup, String path) {
         if (soup == null) {
             return null;
         }
@@ -1632,10 +1466,10 @@ public class SmartStore  {
             return soup;
         }
         String[] pathElements = path.split("[.]");
-		return projectRecursive(soup, pathElements, 0);
+		return project(soup, pathElements, 0);
     }
 
-	private static Object projectRecursive(Object jsonObj, String[] pathElements, int index) {
+	private static Object project(Object jsonObj, String[] pathElements, int index) {
 		Object result = null;
 		if (index == pathElements.length) {
 			return jsonObj;
@@ -1646,15 +1480,15 @@ public class SmartStore  {
 
 			if (jsonObj instanceof JSONObject) {
 				JSONObject jsonDict = (JSONObject) jsonObj;
-				Object dictVal = jsonDict.opt(pathElement);
-				result = projectRecursive(dictVal, pathElements, index+1);
+				Object dictVal = JSONObjectHelper.opt(jsonDict, pathElement);
+				result = project(dictVal, pathElements, index+1);
 			}
 			else if (jsonObj instanceof JSONArray) {
 				JSONArray jsonArr = (JSONArray) jsonObj;
 				result = new JSONArray();
 				for (int i=0; i<jsonArr.length(); i++) {
-					Object arrayElt = jsonArr.opt(i);
-					Object resultPart = projectRecursive(arrayElt, pathElements, index);
+					Object arrayElt = JSONObjectHelper.opt(jsonArr, i);
+					Object resultPart = project(arrayElt, pathElements, index);
 					if (resultPart != null) {
 						((JSONArray) result).put(resultPart);
 					}
@@ -1733,8 +1567,6 @@ public class SmartStore  {
             super(message);
         }
 
-        public SmartStoreException(String message, Throwable t) { super(message, t); }
-
         private static final long serialVersionUID = -6369452803270075464L;
 
     }
@@ -1770,10 +1602,7 @@ public class SmartStore  {
 	 * @param soupName Name of the soup to determine external storage enablement.
 	 *
 	 * @return  True if soup uses external storage; false otherwise.
-	 *
-	 * Deprecated: we are removing external storage and soup spec in 11.0
 	 */
-	@Deprecated
 	public boolean usesExternalStorage(String soupName) {
 		final SQLiteDatabase db = getDatabase();
 		synchronized (db) {
@@ -1782,27 +1611,18 @@ public class SmartStore  {
 	}
 
 	/**
-	 * Get SQLCipher runtime settings
+	 * Get compile options
 	 *
-	 * @return list of SQLCipher runtime settings
-	 */
-	public List<String> getRuntimeSettings() {
-		return queryPragma("cipher_settings");
-	}
-
-	/**
-	 * Get SQLCipher compile options
-	 *
-	 * @return list of SQLCipher compile options
+	 * @return list of compile options
 	 */
 	public List<String> getCompileOptions() {
 		return queryPragma("compile_options");
 	}
 
 	/**
-	 * Get SQLCipher version
+	 * Get sqlcipher version
 	 *
-	 * @return SQLCipher version
+	 * @return sqlcipher version
 	 */
 	public String getSQLCipherVersion() {
 		return TextUtils.join(" ", queryPragma("cipher_version"));

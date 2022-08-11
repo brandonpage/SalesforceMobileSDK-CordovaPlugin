@@ -117,7 +117,7 @@ public class EventBuilderHelper {
 
         UserAccount account = userAccount;
         if (account == null) {
-            account = UserAccountManager.getInstance().getCachedCurrentUser();
+            account = UserAccountManager.getInstance().getCurrentUser();
         }
         if (account == null) {
             return;

@@ -26,8 +26,15 @@
  */
 package com.salesforce.androidsdk.smartstore.app;
 
+import com.salesforce.androidsdk.accounts.UserAccount;
+import com.salesforce.androidsdk.app.SalesforceSDKManager;
 import com.salesforce.androidsdk.app.SalesforceSDKUpgradeManager;
-import com.salesforce.androidsdk.smartstore.util.SmartStoreLogger;
+import com.salesforce.androidsdk.smartstore.store.DBOpenHelper;
+import com.salesforce.androidsdk.smartstore.store.SmartStore;
+
+import net.sqlcipher.database.SQLiteDatabase;
+
+import java.util.List;
 
 /**
  * This class handles upgrades from one version to another.
@@ -40,7 +47,6 @@ public class SmartStoreUpgradeManager extends SalesforceSDKUpgradeManager {
      * Key in shared preference file for smart store version.
      */
     private static final String SMART_STORE_KEY = "smart_store_version";
-    private static final String TAG = "SmartStoreUpgradeManager";
 
     private static SmartStoreUpgradeManager INSTANCE = null;
 
@@ -67,21 +73,13 @@ public class SmartStoreUpgradeManager extends SalesforceSDKUpgradeManager {
      * version to the current version.
      */
     protected synchronized void upgradeSmartStore() {
-        final String installedVersion = getInstalledSmartStoreVersion();
+        String installedVersion = getInstalledSmartStoreVersion();
         if (installedVersion.equals(SmartStoreSDKManager.SDK_VERSION)) {
             return;
         }
 
         // Update shared preference file to reflect the latest version.
         writeCurVersion(SMART_STORE_KEY, SmartStoreSDKManager.SDK_VERSION);
-
-        // If the installed version < v8.2.0, we need to migrate encryption keys.
-        try {
-            final String majorVersionNum = installedVersion.substring(0, 3);
-            double installedVerDouble = Double.parseDouble(majorVersionNum);
-        } catch (Exception e) {
-            SmartStoreLogger.e(TAG, "Failed to parse installed version.");
-        }
     }
 
     /**
@@ -91,5 +89,20 @@ public class SmartStoreUpgradeManager extends SalesforceSDKUpgradeManager {
      */
     public String getInstalledSmartStoreVersion() {
         return getInstalledVersion(SMART_STORE_KEY);
+    }
+
+    @Override
+    public void upgradeTo6Dot0(String oldKey, String newKey) {
+        super.upgradeTo6Dot0(oldKey, newKey);
+        final List<UserAccount> userAccounts = SalesforceSDKManager.getInstance().getUserAccountManager().getAuthenticatedUsers();
+        if (userAccounts != null) {
+            for (final UserAccount account : userAccounts) {
+                final DBOpenHelper dbHelper = DBOpenHelper.getOpenHelper(SalesforceSDKManager.getInstance().getAppContext(), account);
+                if (dbHelper != null) {
+                    final SQLiteDatabase db = dbHelper.getWritableDatabase(oldKey);
+                    SmartStore.changeKey(db, oldKey, newKey);
+                }
+            }
+        }
     }
 }

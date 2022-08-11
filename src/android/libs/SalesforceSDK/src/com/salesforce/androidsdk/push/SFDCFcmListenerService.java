@@ -45,8 +45,10 @@ public class SFDCFcmListenerService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage message) {
         if (message != null && SalesforceSDKManager.hasInstance()) {
-            final PushNotificationDecryptor pnDecryptor = PushNotificationDecryptor.getInstance();
-            pnDecryptor.onPushMessageReceived(message);
+            final PushNotificationInterface pnInterface = SalesforceSDKManager.getInstance().getPushNotificationReceiver();
+            if (pnInterface != null) {
+                pnInterface.onPushMessageReceived(message);
+            }
         }
     }
 }
