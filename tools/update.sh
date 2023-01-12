@@ -79,13 +79,13 @@ update_repo ()
 }
 
 ROOT_FOLDER=$(get_root_folder)
-ANDROID_SDK_REPO_PATH="https://github.com/forcedotcom/SalesforceMobileSDK-Android.git"
+ANDROID_SDK_REPO_PATH="https://github.com/brandonpage/SalesforceMobileSDK-Android.git"
 ANDROID_SDK_FOLDER="SalesforceMobileSDK-Android"
 IOS_HYBRID_SDK_REPO_PATH="https://github.com/forcedotcom/SalesforceMobileSDK-iOS-Hybrid.git"
 IOS_HYBRID_SDK_FOLDER="SalesforceMobileSDK-iOS-Hybrid"
 IOS_SDK_REPO_PATH="https://github.com/forcedotcom/SalesforceMobileSDK-iOS.git"
 IOS_SDK_FOLDER="SalesforceMobileSDK-iOS"
-SHARED_SDK_REPO_PATH="https://github.com/forcedotcom/SalesforceMobileSDK-Shared.git"
+SHARED_SDK_REPO_PATH="https://github.com/brandonpage/SalesforceMobileSDK-Shared.git"
 SHARED_SDK_FOLDER="SalesforceMobileSDK-Shared"
 
 update_ios_repo ()
